@@ -336,7 +336,15 @@ EOF
   mkvextract chapters -s "${input}" > chapters.list
   
   ### MUX MP4 - UPDATED PARAMETER SYNTAX FOR NEWER MP4BOX VERSION
-  mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=$dv_target:cm=hdr10")
+  # Based on the syntax documentation, compatibility mode is part of the profile value
+  # e.g. "8.hdr10" instead of separate parameters
+  if [ "$dv_target" -eq 8 ]; then
+      mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=8.hdr10")
+  else
+      # For other profiles
+      mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=$dv_target")
+  fi
+  
   tcount=2
   while read i;do
     stream=`echo "$i" | cut -f1 -d\|`
