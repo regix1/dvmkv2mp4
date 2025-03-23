@@ -105,6 +105,41 @@ function processsubs {
     fi
 }
 
+# Modified incremental MP4Box function to avoid floating point exception
+function incremental_mp4box {
+  local video="$1"
+  local dv_profile="$2"
+  local output="$3"
+  local temp_file="temp_output.mp4"
+  
+  echo "Creating MP4 with video track using incremental method..."
+  $ionc MP4Box -add "$video:dv-profile=$dv_profile" -brand mp42isom -ab dby1 -tmp ./tmp "$temp_file"
+  
+  # Add audio tracks one by one
+  tcount=2
+  while read i; do
+    stream=`echo "$i" | cut -f1 -d\|`
+    lang=`echo "$i" | cut -f6 -d\|`
+    title=`echo "$i" | cut -f7 -d\|`
+    delay=`echo "$i" | cut -f5 -d\|`
+    
+    echo "Adding audio track: $title ($lang)"
+    $ionc MP4Box -add "$temp_file" -add "$stream:sopt:gfreg=ffdmx" -lang $tcount=$lang -name $tcount="$title" -delay $tcount=$delay -brand mp42isom -ab dby1 -tmp ./tmp "temp_new.mp4"
+    rm "$temp_file"
+    mv "temp_new.mp4" "$temp_file"
+    tcount=$((tcount+1))
+  done <<< "$(cat audio.exports)"
+  
+  # Add chapters if present
+  if [ -s "chapters.list" ]; then
+    echo "Adding chapters..."
+    $ionc MP4Box -add "$temp_file" -chap "chapters.list" -brand mp42isom -ab dby1 -tmp ./tmp "$output.mp4"
+    rm "$temp_file"
+  else
+    mv "$temp_file" "$output.mp4"
+  fi
+}
+
 function process_file {
   local input="$1"
   ffstart5_8="$ionc ffmpeg -i \"$input\" -y -loglevel error -stats -map 0:0 -c:v copy -vbsf hevc_mp4toannexb -f hevc BL_RPU.hevc"
@@ -331,49 +366,12 @@ EOF
     fi
   fi
 
-
   ### GRAB CHAPTERS
   mkvextract chapters -s "${input}" > chapters.list
   
-  ### MUX MP4
-  mp4string=("$ionc MP4Box -add BL_RPU.hevc:dv-profile=$dv_target")
-  tcount=2
-  while read i;do
-    stream=`echo "$i" | cut -f1 -d\|`
-    id=`echo "$i" | cut -f2 -d\|`
-    codec=`echo "$i" | cut -f3 -d\|`
-    orig_codec=`echo "$i" | cut -f4 -d\|`
-    delay=`echo "$i" | cut -f5 -d\|`
-    lang=`echo "$i" | cut -f6 -d\|`
-    title=`echo "$i" | cut -f7 -d\|`
-    mp4opts="-add \"$stream\":sopt:gfreg=ffdmx -lang $tcount=$lang -name $tcount=\"$title\" -delay $tcount=$delay"
-    mp4string+=($mp4opts)
-    tcount=$((tcount+1))
-  done <<< "$(cat audio.exports)"
-  if [ $ADDSUBS == "yes" ]; then
-    while read i;do
-      stream=`echo "$i" | cut -f1 -d\|`
-      id=`echo "$i" | cut -f2 -d\|`
-      codec=`echo "$i" | cut -f3 -d\|`
-      orig_codec=`echo "$i" | cut -f4 -d\|`
-      delay=`echo "$i" | cut -f5 -d\|`
-      lang=`echo "$i" | cut -f6 -d\|`
-      title=`echo "$i" | cut -f7 -d\|`
-      echo $stream
-      echo $codec
-      if [ "$codec" == "srt" ] && [ -s "$stream" ]; then
-        mp4opts="-add \"$stream\":lang=$lang:name=\"$title\" -delay $tcount=$delay"
-        mp4string+=($mp4opts)
-        tcount=$((tcount+1))
-      fi
-    done <<< "$(cat sub.exports)"
-  fi
-  if [ -s "chapters.list" ]; then
-    mp4string+=("-chap chapters.list")
-  fi
-  mp4string+=("-tmp ./tmp -brand mp42isom -ab dby1 \"$output.mp4\"")
-  echo ${mp4string[*]}
-  eval ${mp4string[*]}
+  # Use incremental MP4Box method to avoid floating point exception
+  incremental_mp4box "BL_RPU.hevc" "$dv_target" "$output"
+  
   if [ $DEBUG != "yes" ]; then
     cleanup
   else
@@ -384,7 +382,6 @@ EOF
 start=`date +%s`
 echo "$HEADER"
 echo "Starting Conversions `date`"
-
 # Check if a single file was specified
 if [ ! -z "$SINGLEFILE" ]; then
   # Process single file
@@ -406,7 +403,6 @@ else
     process_file "$f"
   done
 fi
-
 end=`date +%s`
 runtime=$((end-start))
 hours=$((runtime / 3600)); minutes=$(( (runtime % 3600) / 60 )); seconds=$(( (runtime % 3600) % 60 )); 
