@@ -336,13 +336,19 @@ EOF
   mkvextract chapters -s "${input}" > chapters.list
   
   ### MUX MP4 - UPDATED PARAMETER SYNTAX FOR NEWER MP4BOX VERSION
-  # Based on the syntax documentation, compatibility mode is part of the profile value
-  # e.g. "8.hdr10" instead of separate parameters
-  if [ "$dv_target" -eq 8 ]; then
-      mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=8.hdr10")
-  else
-      # For other profiles
-      mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=$dv_target")
+  # Use the correct compatibility mode for each Dolby Vision profile
+  if [ "$dv_target" -eq 4 ]; then
+    mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=4.bt709")
+  elif [ "$dv_target" -eq 5 ]; then
+    mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=5.hdr10")
+  elif [ "$dv_target" -eq 7 ]; then
+    if [ "$vscount" -eq 1 ]; then
+      mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=7.bt709")
+    else
+      mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=7.none")
+    fi
+  else # Profile 8
+    mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=8.hdr10")
   fi
   
   tcount=2
