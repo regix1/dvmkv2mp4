@@ -1,5 +1,4 @@
 FROM ubuntu:20.04
-
 ARG mediainforepo="https://mediaarea.net/repo/deb/repo-mediaarea_1.0-19_all.deb"
 ARG dovitoollink="https://github.com/quietvoid/dovi_tool/releases/download/1.4.6/dovi_tool-1.4.6-x86_64-unknown-linux-musl.tar.gz"
 ARG hdr10plustoollink="https://github.com/quietvoid/hdr10plus_tool/releases/download/1.2.2/hdr10plus_tool-1.2.2-x86_64-unknown-linux-musl.tar.gz"
@@ -9,23 +8,25 @@ ARG dotnetlink="https://download.visualstudio.microsoft.com/download/pr/48fbc600
 ARG pgs2srtlink="https://github.com/Tentacule/PgsToSrt/releases/download/v1.4.2/PgsToSrt-1.4.2.zip"
 ARG tesseractlink="https://github.com/tesseract-ocr/tessdata.git"
 
-COPY /dvmkv2mp4 /usr/local/bin
-
+COPY dvmkv2mp4 /usr/local/bin
 RUN chmod a+x /usr/local/bin/dvmkv2mp4
 
 # Install MEDIAINFO MKVTOOLNIX FFMPEG WGET
-RUN \
-  printf "\n---Install mediainfo mkvtoolnix ffmpeg and wget---\n\n" && \
-  apt-get update && \
-  apt-get install -y software-properties-common wget && \
-  add-apt-repository ppa:savoury1/ffmpeg4 && \
-  wget -O /usr/share/keyrings/gpg-pub-moritzbunkus.gpg https://mkvtoolnix.download/gpg-pub-moritzbunkus.gpg && \
-  echo "deb [signed-by=/usr/share/keyrings/gpg-pub-moritzbunkus.gpg] https://mkvtoolnix.download/ubuntu/ focal main" | tee -a /etc/apt/sources.list && \
-  wget ${mediainforepo} -O temp.deb && \
-  dpkg -i temp.deb && \
-  rm temp.deb && \
-  apt-get update && \
-  apt-get install -y \
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    software-properties-common \
+    wget \
+    gnupg \
+    apt-transport-https \
+    ca-certificates && \
+    add-apt-repository -y ppa:jonathonf/ffmpeg-4 && \
+    wget -O /usr/share/keyrings/gpg-pub-moritzbunkus.gpg https://mkvtoolnix.download/gpg-pub-moritzbunkus.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/gpg-pub-moritzbunkus.gpg] https://mkvtoolnix.download/ubuntu/ focal main" | tee -a /etc/apt/sources.list && \
+    wget ${mediainforepo} -O temp.deb && \
+    dpkg -i temp.deb && \
+    rm temp.deb && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
     ffmpeg \
     mediainfo \
     mkvtoolnix \
@@ -33,64 +34,61 @@ RUN \
     bc
 
 # DOVI_TOOL
-RUN \
-  printf "\n---Download dovi_tool---\n\n" && \
-  wget -O - ${dovitoollink} | \
-  tar -zx -C /usr/local/bin/
+RUN wget -O - ${dovitoollink} | \
+    tar -zx -C /usr/local/bin/
 
 # HDR10PLUS_TOOL
-RUN \
-  printf "\n---Download hdr10plus_tool---\n\n" && \
-  wget -O - ${hdr10plustoollink} | \
-  tar -zx -C /usr/local/bin/ && \
-  mv /usr/local/bin/dist/* /usr/local/bin/
+RUN wget -O - ${hdr10plustoollink} | \
+    tar -zx -C /usr/local/bin/ && \
+    mv /usr/local/bin/dist/* /usr/local/bin/ || true
 
 # MP4BOX
-RUN \
-  printf "\n---Download build utils---\n\n" && \
-  apt-get install -y build-essential pkg-config git && \
-  apt-get install -y zlib1g-dev && \
-  printf "\n---Build mp4box---\n\n" && \
-  mkdir mp4box && \
-  cd mp4box && \
-  git clone --depth 1 --branch ${mp4boxtag} ${mp4boxlink} gpac_public && \
-  cd gpac_public && \
-  ./configure --static-bin && \
-  make -j $(nproc) && \
-  make install && \
-  MP4Box -version && \
-  cd ../.. && \
-  rm -Rf mp4box
+RUN apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    git \
+    zlib1g-dev && \
+    mkdir mp4box && \
+    cd mp4box && \
+    git clone --depth 1 --branch ${mp4boxtag} ${mp4boxlink} gpac_public && \
+    cd gpac_public && \
+    ./configure --static-bin && \
+    make -j $(nproc) && \
+    make install && \
+    MP4Box -version && \
+    cd ../.. && \
+    rm -Rf mp4box
 
 # PGS2SRT
-RUN \
-  printf "\n---Download dotnet runtime---\n\n" && \
-  mkdir /opt/dotnet && \
-  wget -O - ${dotnetlink} | \
-  tar -zx -C /opt/dotnet/ && \
-  printf "\n---Install tesseract and git---\n\n" && \
-  apt-get install -y libtesseract4 unzip git && \
-  printf "\n---Download pgs2srt---\n\n" && \
-  mkdir /opt/PgsToSrt && \
-  wget ${pgs2srtlink} -O temp.zip && \
-  unzip -d /opt/PgsToSrt/ temp.zip && \
-  rm temp.zip && \
-  printf "\n---Download tesseract models---\n\n" && \
-  cd /opt/PgsToSrt/net6 && \
-  git clone --depth 1 ${tesseractlink} && \
-  printf "\n---Uninstall unzip and git and cleanup apt cache---\n\n" && \
-  apt-get purge -y software-properties-common build-essential pkg-config git zlib1g-dev unzip git && \
-  apt-get autoremove -y && \
-  rm -rf \ 
+RUN mkdir -p /opt/dotnet && \
+    wget -O - ${dotnetlink} | \
+    tar -zx -C /opt/dotnet/ && \
+    apt-get install -y --no-install-recommends \
+    libtesseract4 \
+    unzip \
+    git && \
+    mkdir -p /opt/PgsToSrt && \
+    wget ${pgs2srtlink} -O temp.zip && \
+    unzip -d /opt/PgsToSrt/ temp.zip && \
+    rm temp.zip && \
+    cd /opt/PgsToSrt/net6 && \
+    git clone --depth 1 ${tesseractlink} && \
+    apt-get purge -y \
+    software-properties-common \
+    build-essential \
+    pkg-config \
+    git \
+    zlib1g-dev \
+    unzip && \
+    apt-get autoremove -y && \
+    apt-get clean && \
+    rm -rf \
     /var/lib/apt/lists/* \
-    /var/tmp/*
+    /var/tmp/* \
+    /tmp/*
 
-RUN \
-  printf "\n---Create \"convert\" directory for volume attachment---\n\n" && \
-  mkdir /convert
-
+# Create the volume mount point
+RUN mkdir /convert
 VOLUME ["/convert"]
-
 WORKDIR /convert
-
 ENTRYPOINT ["dvmkv2mp4"]
