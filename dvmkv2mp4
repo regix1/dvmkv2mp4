@@ -12,6 +12,8 @@ DEBUG="no"
 ## Check OSTYPE and set ionice level to idle to not hammer disks during conversion
 ADDSUBS="no"
 ## Whether to add subs to mp4 file default no as some bad subs can break the encoding"
+## Single file to process, if empty process all in directory
+SINGLEFILE=""
 if [[ $OSTYPE == 'darwin'* ]]
 then
   ionc="ionice --low"
@@ -32,12 +34,15 @@ function print_help {
   echo "-r | --remove-source  - remove source video after conversion"
   echo "-s | --add-subs       - add srt subtitles to mp4 as subtitle tracks"
   echo "-d | --debug          - keep intermediary conversion files"
+  echo "-f | --file           - process a single file instead of all MKVs in directory"
   echo "-v | --version        - print version"
   echo ""
   echo "dvmkv2mp4 -l und,pol,eng -r -a # will process any DV/HDR10+ mkvs found in current dir and keep only Undefined, Polish and English tracks, will remove source file once done and will create audio-subs-meta file for future needs"
+  echo ""
+  echo "dvmkv2mp4 -f video.mkv # will process only the specified file instead of all MKVs in the directory"
 }
 
-TEMP=$(getopt -o al:rsdvh --long asm,langs:,remove-source,add-subs,debug,version,help \
+TEMP=$(getopt -o al:rsdvf:h --long asm,langs:,remove-source,add-subs,debug,version,file:,help \
               -n 'dvmkv2mp4' -- "$@")
 
 if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
@@ -54,6 +59,7 @@ while true; do
     -s | --add-subs ) ADDSUBS="yes"; shift ;;
     -h | --help ) print_help; shift; exit ;;
     -l | --langs ) LANGS="$2"; shift 2 ;;
+    -f | --file ) SINGLEFILE="$2"; shift 2 ;;
     -- ) shift; break ;;
     * ) break ;;
   esac
@@ -99,11 +105,8 @@ function processsubs {
     fi
 }
 
-start=`date +%s`
-echo "$HEADER"
-echo "Starting Conversions `date`"
-for f in *.mkv;do
-  input="$f"
+function process_file {
+  local input="$1"
   ffstart5_8="$ionc ffmpeg -i \"$input\" -y -loglevel error -stats -map 0:0 -c:v copy -vbsf hevc_mp4toannexb -f hevc BL_RPU.hevc"
   ffstart7_1="$ionc ffmpeg -i \"$input\" -y -loglevel error -stats -map 0:0 -c:v copy -vbsf hevc_mp4toannexb -f hevc -"
   ffstart7_2="$ionc ffmpeg -i \"$input\" -y -loglevel error -stats -map 0:v:0 -c:v copy -vbsf hevc_mp4toannexb -f hevc BL.hevc -map 0:v:1 -c:v copy -vbsf hevc_mp4toannexb -f hevc -"
@@ -119,7 +122,7 @@ for f in *.mkv;do
   ## AUTODETECT SOURCE TYPE AND CONSTRUCT FFMPEG
   if [ -z "$hdr10plus" ] && [ -z "$dv" ] || [ -f "${input}.dvconverting" ]; then
     echo "Not an HDR10+ nor DV source or already converting"
-    continue
+    return
   else
     touch "${input}.dvconverting"
     if [ ! -z "$dv" ]; then
@@ -127,7 +130,7 @@ for f in *.mkv;do
       if { [ "$dv_profile" -ne 4 ] && [ "$dv_profile" -ne 5 ] && [ "$dv_profile" -ne 7 ] && [ "$dv_profile" -ne 8 ]; } ; then
         info "Unsupported Dolby Vision profile '$dv_profile'; doing nothing"
         rm *.dvconverting
-        continue
+        return
       fi
       echo "Converting DV$dv_profile: \"$input\""
       vscount=`ffprobe -loglevel error -select_streams v -show_entries stream=type:stream=codec_name:stream=index:stream_tags=language:stream_tags=title -of csv=p=0 "$input" | grep hevc | wc -l`
@@ -191,6 +194,12 @@ for f in *.mkv;do
 EOF
     fi
   fi
+  
+  # Reset export files
+  > audio.exports
+  > sub.exports
+  > tracks.list
+  
   # SELECT LANG TRACKS
   as=$(ffprobe -loglevel error -select_streams a -show_entries stream=type:stream=codec_name:stream=index:stream=start_pts:stream_tags=language:stream_tags=title -of csv=p=0 "$input" | grep $(echo $LANGS | $sed 's/,/,\\|,/g') | $sed 's/,/\|/g')
   if [ "$as" == "" ]; then
@@ -318,7 +327,7 @@ EOF
           eval "cp \"$i\" \"`echo "$i" | $sed 's/\ DV-MP4//g' | $sed \"s/.*\.\(.*\)\.\(s..\)/\$inputbase\.\1\.\2/g\"`\"";
       done
       rm BL.hevc *DV-MP4.asm *DV-MP4.*.srt *DV-MP4.sup ${input}.dvconverting
-      continue
+      return
     fi
   fi
 
@@ -358,18 +367,6 @@ EOF
         tcount=$((tcount+1))
       fi
     done <<< "$(cat sub.exports)"
-
-    # while read i; do
-    # mp4opts="-add "$i":lang=pol:name='downloaded'"
-    # mp4string+=($mp4opts)
-    # done <<< $(ls *{pl,pl-sync}.srt)
-    # while read i; do
-    # if [ "$i" != "" ]; then
-    # mp4opts="-add "$i":lang=eng:name='downloaded'"
-    # mp4string+=($mp4opts)
-    # fi
-    # done <<< $(ls *{en,en-sync}.srt)
-
   fi
   if [ -s "chapters.list" ]; then
     mp4string+=("-chap chapters.list")
@@ -382,7 +379,34 @@ EOF
   else
     rm "${input}.dvconverting"
   fi 
-done
+}
+
+start=`date +%s`
+echo "$HEADER"
+echo "Starting Conversions `date`"
+
+# Check if a single file was specified
+if [ ! -z "$SINGLEFILE" ]; then
+  # Process single file
+  if [ -f "$SINGLEFILE" ]; then
+    echo "Processing single file: $SINGLEFILE"
+    process_file "$SINGLEFILE"
+  else
+    echo "Error: File $SINGLEFILE not found"
+    exit 1
+  fi
+else
+  # Process all MKV files in directory
+  for f in *.mkv; do
+    # Check if the wildcard was expanded
+    if [ ! -f "$f" ]; then
+      echo "No MKV files found in current directory"
+      break
+    fi
+    process_file "$f"
+  done
+fi
+
 end=`date +%s`
 runtime=$((end-start))
 hours=$((runtime / 3600)); minutes=$(( (runtime % 3600) / 60 )); seconds=$(( (runtime % 3600) % 60 )); 
