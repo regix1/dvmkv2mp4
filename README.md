@@ -11,18 +11,19 @@ Converts any Dolby Vision (Profile 5, 7 Single Track, 7 Dual Track, 8) / HDR10+ 
 - Converts any truehd, dts etc to high bitrate Dolby Digital Plus, copies without conversion supported tracks like ac3, eac3
 - Keeps audio/subtitle track delays in resulting mp4
 - Keeps chapters
-- Converts PGS subtitles found to SRT subtitles with PGSToSRT
+- Converts PGS subtitles found to SRT subtitles with PGSToSrt
 - Extracts all SRT/Subrip tracks to SRT files
 - Can inject subtitles into mp4 as subtitle tracks
 - Can create backup mkv with .asm extension (audio subs meta) that has the original audio (truehd etc) subtitles tracks, chapters but without video to safekeep for future comeback conversions to original mkv and not waste place as you can easily demux the mp4 video and mux it with that mkv to come back to original
 - Can filter and leave only desired language tracks
 - MacOS support
 - Process a single file instead of all files in a directory
+- Mobile optimization option for iPhone and Android playback
 
 ## Requirements
 
 - ffmpeg 4.4
-- **mp4box 1.0.1 - it's important to use this version otherwise script will fail**
+- **mp4box 2.0.0 - it's important to use this version otherwise script will fail**
 - dovi_tool
 - hdr10plus_tool
 - mediainfo v21
@@ -55,12 +56,12 @@ sudo mv dist/hdr10plus_tool /usr/local/bin/
 # MP4BOX
 sudo apt-get install build-essential pkg-config git
 sudo apt-get install zlib1g-dev
-git clone --depth 1 --branch v1.0.1 https://github.com/gpac/gpac.git gpac_public
+git clone --depth 1 --branch v2.0.0 https://github.com/gpac/gpac.git gpac_public
 cd gpac_public
 ./configure --static-bin
 make
 sudo make install
-MP4Box -version # MAKE SURE IT SAYS 1.0.1
+MP4Box -version # MAKE SURE IT SAYS 2.0.0
 
 # PGS2SRT
 wget https://download.visualstudio.microsoft.com/download/pr/48fbc600-8228-424e-aaed-52b7e601c277/c493b8ac4629341f1e5acc4ff515fead/dotnet-runtime-6.0.10-linux-x64.tar.gz
