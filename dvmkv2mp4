@@ -117,34 +117,19 @@ function is_dolby_vision {
       return 0
     fi
   elif [[ "$input" == *.mp4 ]]; then
-    # For MP4 files, first check mediainfo to confirm it has DV
-    local dv_check=$(mediainfo "$input" | grep -m 1 'HDR format.*Dolby Vision')
-    
-    if [ -z "$dv_check" ]; then
-      # No Dolby Vision according to mediainfo, needs processing
-      return 1
-    fi
-    
-    # If it has DV according to mediainfo, now check if it already has a valid RPU structure
-    # with dovi_tool - but handle any potential errors gracefully
-    result=$(dovi_tool info "$input" 2>&1 || echo "DOVI_TOOL_ERROR")
-    
+    # For MP4 files, use dovi_tool info to check for Dolby Vision properly
     echo "Debug - dovi_tool output for $input:"
-    echo "$result"
+    result=$(dovi_tool info --input "$input" 2>&1 || echo "DOVI_TOOL_ERROR")
     
-    if [[ "$result" == *"DOVI_TOOL_ERROR"* ]]; then
-      echo "Error running dovi_tool, assuming file needs processing"
-      return 1
-    elif [[ "$result" == *"No RPU NALs found"* ]]; then
-      echo "No RPU NALs found in file, needs processing"
-      return 1
-    elif [[ "$result" == *"rpu_data_mapping"* ]] || [[ "$result" == *"dovi_setting"* ]] || [[ "$result" == *"profile"* ]]; then
-      # These strings indicate valid Dolby Vision RPU metadata was found
-      echo "File already processed with valid Dolby Vision RPUs, skipping: $input"
+    if echo "$result" | grep -q "RPU"; then
+      # Dolby Vision found and has proper RPUs, already processed
+      echo "File already processed with Dolby Vision, skipping: $input"
       return 0
     else
-      # If we can't determine with certainty, try to process the file
-      echo "Unable to determine Dolby Vision status, attempting processing: $input"
+      # Log the error for debugging
+      echo "$result"
+      echo "Error running dovi_tool, assuming file needs processing"
+      # No proper RPUs found, needs processing
       return 1
     fi
   else
