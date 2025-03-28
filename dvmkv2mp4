@@ -86,18 +86,6 @@ function cleanup {
   if [ $REMOVESOURCE == "yes" ]; then
     rm -f "${input}"
   fi
-  
-  # Clean up SRT files if cleanup is called after successful conversion
-  if [ "$ADDSUBS" == "yes" ]; then
-    # Remove SRT files that were successfully added to MP4
-    while read i;do
-      stream=`echo "$i" | cut -f1 -d\|`
-      codec=`echo "$i" | cut -f3 -d\|`
-      if [ "$codec" == "srt" ] && [ -s "$stream" ]; then
-        rm -f "$stream"
-      fi
-    done <<< "$(cat sub.exports)"
-  fi
 }
 
 function clean_directory {
