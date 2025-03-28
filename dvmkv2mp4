@@ -96,6 +96,48 @@ function clean_directory {
   fi
 }
 
+function is_dolby_vision {
+  local input="$1"
+  local result
+  
+  # Check if the file is an MP4 or MKV
+  if [[ "$input" == *.mkv ]]; then
+    # For MKV files, we rely on mediainfo first
+    local dv_check=$(mediainfo "$input" | grep -m 1 'HDR format.*Dolby Vision')
+    local hdr10plus_check=$(mediainfo "$input" | grep -m 1 'HDR format.*HDR10+')
+    
+    if [ ! -z "$dv_check" ]; then
+      # It's already a Dolby Vision file, but it's an MKV, so we need to convert to MP4
+      return 1
+    elif [ ! -z "$hdr10plus_check" ]; then
+      # It's an HDR10+ file, we need to convert it
+      return 1
+    else
+      # Not a DV or HDR10+ file, skip it
+      return 0
+    fi
+  elif [[ "$input" == *.mp4 ]]; then
+    # For MP4 files, we use dovi_tool to check for Dolby Vision
+    # Temporary capture the output to avoid printing to the console
+    result=$(dovi_tool info "$input" 2>&1 || true)
+    
+    if echo "$result" | grep -q "No RPU NALs found"; then
+      # No Dolby Vision found
+      return 1
+    elif echo "$result" | grep -q "RPU"; then
+      # Dolby Vision found, already processed
+      echo "File already processed with Dolby Vision, skipping: $input"
+      return 0
+    else
+      # Error or uncertain, try to process the file
+      return 1
+    fi
+  else
+    # Not an MKV or MP4 file, skip
+    return 0
+  fi
+}
+
 function processsubs {
     ### PROCESS SUBS
     inputbase=${input%.mkv}
@@ -124,9 +166,14 @@ function processsubs {
 function process_file {
   local input="$1"
   
-  # Skip files that have already been processed
-  if [[ "$input" == *"DV-MP4.mp4" ]]; then
-    echo "File already processed, skipping: $input"
+  # Check if the file is already a properly processed Dolby Vision file
+  if is_dolby_vision "$input"; then
+    return
+  fi
+  
+  # Check if conversion is already in progress
+  if [ -f "${input}.dvconverting" ]; then
+    echo "File already being converted, skipping: $input"
     return
   fi
   
@@ -148,12 +195,12 @@ function process_file {
   dv=$(mediainfo "$input" | grep -m 1 'HDR format.*Dolby Vision')
   hdr10plus=$(mediainfo "$input" | grep -m 1 'HDR format.*HDR10+')
   
-  output=`echo "$input" | $sed 's/\ DV.mkv\|\ HDR10+.mkv\|\ HDR.mkv/.mkv/g' | $sed s/\.mkv/\ DV-MP4\.mkv/g`
+  output=`echo "$input" | $sed 's/\ DV.mkv\|\ HDR10+.mkv\|\ HDR.mkv/.mkv/g' | $sed 's/\.mp4/\.mkv/g' | $sed s/\.mkv/\ DV-MP4\.mkv/g`
   output="${output%.mkv}"
 
   ## AUTODETECT SOURCE TYPE AND CONSTRUCT FFMPEG
-  if [ -z "$hdr10plus" ] && [ -z "$dv" ] || [ -f "${input}.dvconverting" ]; then
-    echo "Not an HDR10+ nor DV source or already converting"
+  if [ -z "$hdr10plus" ] && [ -z "$dv" ]; then
+    echo "Not an HDR10+ nor DV source, skipping: $input"
     return
   else
     touch "${input}.dvconverting"
@@ -484,10 +531,10 @@ if [ ! -z "$SINGLEFILE" ]; then
   fi
 else
   # Process all MKV files in directory
-  for f in *.mkv; do
+  for f in *.mkv *.mp4; do
     # Check if the wildcard was expanded
     if [ ! -f "$f" ]; then
-      echo "No MKV files found in current directory"
+      echo "No MKV or MP4 files found in current directory"
       break
     fi
     process_file "$f"
