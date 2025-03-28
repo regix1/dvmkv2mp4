@@ -117,19 +117,15 @@ function is_dolby_vision {
       return 0
     fi
   elif [[ "$input" == *.mp4 ]]; then
-    # For MP4 files, we use dovi_tool to check for Dolby Vision
-    # Temporary capture the output to avoid printing to the console
+    # For MP4 files, use dovi_tool info to check for Dolby Vision properly
     result=$(dovi_tool info "$input" 2>&1 || true)
     
-    if echo "$result" | grep -q "No RPU NALs found"; then
-      # No Dolby Vision found
-      return 1
-    elif echo "$result" | grep -q "RPU"; then
-      # Dolby Vision found, already processed
+    if echo "$result" | grep -q "RPU"; then
+      # Dolby Vision found and has proper RPUs, already processed
       echo "File already processed with Dolby Vision, skipping: $input"
       return 0
     else
-      # Error or uncertain, try to process the file
+      # No proper RPUs found, needs processing
       return 1
     fi
   else
