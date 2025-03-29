@@ -13,8 +13,8 @@ DEBUG="no"
 ADDSUBS="no"
 ## Single file to process, if empty process all in directory
 SINGLEFILE=""
-## Whether to optimize for mobile playback
-MOBILE="no"
+## Whether to output file information (name, file, path)
+FILEOUTPUT="no"
 ## Audio bitrate for converted tracks
 AUDIO_BITRATE=1024
 
@@ -39,15 +39,15 @@ function print_help {
   echo "-s | --add-subs       - add srt subtitles to mp4 as subtitle tracks"
   echo "-d | --debug          - keep intermediary conversion files"
   echo "-f | --file           - process a single file instead of all MKVs in directory"
-  echo "-m | --mobile         - optimize for mobile playback (iPhone and Android)"
+  echo "-o | --file-output    - output file information (filename, file, path)"
   echo "-v | --version        - print version"
   echo ""
   echo "Examples:"
   echo "dvmkv2mp4 -l und,pol,eng -r -a # process any DV/HDR10+ mkvs found in current dir"
-  echo "dvmkv2mp4 -f video.mkv -m # process only the specified file with mobile-optimized settings"
+  echo "dvmkv2mp4 -f video.mkv -o # process a file and output file information"
 }
 
-TEMP=$(getopt -o al:rsdvf:mh --long asm,langs:,remove-source,add-subs,debug,version,file:,mobile,help \
+TEMP=$(getopt -o al:rsdvf:oh --long asm,langs:,remove-source,add-subs,debug,version,file:,file-output,help \
               -n 'dvmkv2mp4' -- "$@")
 
 if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
@@ -62,7 +62,7 @@ while true; do
     -a | --asm ) ASM="yes"; shift ;;
     -r | --remove-source ) REMOVESOURCE="yes"; shift ;;
     -s | --add-subs ) ADDSUBS="yes"; shift ;;
-    -m | --mobile ) MOBILE="yes"; shift ;;
+    -o | --file-output ) FILEOUTPUT="yes"; shift ;;
     -h | --help ) print_help; shift; exit ;;
     -l | --langs ) LANGS="$2"; shift 2 ;;
     -f | --file ) SINGLEFILE="$2"; shift 2 ;;
@@ -94,6 +94,23 @@ function clean_directory {
     echo "Cleaning leftover files from previous runs..."
     rm -f *DV-MP4*.{srt,sup,asm} 2>/dev/null
   fi
+}
+
+function output_file_info {
+  local input="$1"
+  
+  # Get filename (just the name, no extension)
+  local filename=$(basename "${input%.*}")
+  
+  # Get file (filename with extension)
+  local file=$(basename "$input")
+  
+  # Path is the full path
+  local path="$input"
+  
+  echo "FILEFLOWS_FILENAME:$filename"
+  echo "FILEFLOWS_FILE:$file"
+  echo "FILEFLOWS_PATH:$path"
 }
 
 function is_dolby_vision {
@@ -166,6 +183,11 @@ function processsubs {
 function process_file {
   local input="$1"
   
+  # Output file information if requested
+  if [ "$FILEOUTPUT" == "yes" ]; then
+    output_file_info "$input"
+  fi
+  
   # Check if the file is already a properly processed Dolby Vision file
   if is_dolby_vision "$input"; then
     return
@@ -175,12 +197,6 @@ function process_file {
   if [ -f "${input}.dvconverting" ]; then
     echo "File already being converted, skipping: $input"
     return
-  fi
-  
-  # Set audio bitrate for mobile
-  if [ "$MOBILE" == "yes" ]; then
-    AUDIO_BITRATE=384
-    echo "Using mobile-optimized settings with $AUDIO_BITRATE kbps audio"
   fi
 
   ffstart5_8="$ionc ffmpeg -i \"$input\" -y -loglevel error -stats -map 0:0 -c:v copy -vbsf hevc_mp4toannexb -f hevc BL_RPU.hevc"
@@ -222,28 +238,17 @@ function process_file {
         ffstring=("$ffstart7_2")
       fi
       
-      # For mobile optimization, force Profile 5
-      if [ "$MOBILE" == "yes" ]; then
+      # Set the DV target profile based on source
+      if [ "$dv_profile" -eq 5 ]; then
         dv_target=5
-        echo "Mobile optimization: forcing Profile 5 output"
-      else
-        if [ "$dv_profile" -eq 5 ]; then
-          dv_target=5
-        elif [ "$dv_profile" -eq 4 ]; then
-          dv_target=4
-        else
-          dv_target=8
-        fi
-      fi
-    elif [ ! -z "$hdr10plus" ]; then
-      echo "Converting HDR10+ to DV8: \"$input\""
-      # For mobile optimization, force Profile 5 even for HDR10+
-      if [ "$MOBILE" == "yes" ]; then
-        dv_target=5
-        echo "Mobile optimization: forcing Profile 5 output for HDR10+ source"
+      elif [ "$dv_profile" -eq 4 ]; then
+        dv_target=4
       else
         dv_target=8
       fi
+    elif [ ! -z "$hdr10plus" ]; then
+      echo "Converting HDR10+ to DV8: \"$input\""
+      dv_target=8
       
       ffstring=("$ffstarthdr10plus")
       MaxDML=`mediainfo "$input" | grep 'Mastering display luminance' | cut -f 4 -d:`
@@ -325,30 +330,18 @@ EOF
     title="${title//[\"\',\`]/}"
     ffopts=""
     
-    # Handle different audio codecs based on mobile optimization
+    # Handle different audio codecs
     if [ "$orig_codec" == "truehd" ]; then
-      if [ "$MOBILE" == "yes" ]; then
-        # AAC for mobile
-        ffopts="-map 0:$id -b:a:0 ${AUDIO_BITRATE}k -c:a:0 aac -f aac $id.$lang.aac"
-        echo "$id.$lang.aac|$id|aac|$orig_codec|$delay|$lang|$title" >> audio.exports
-      else
-        ffopts="-map 0:$id -b:a:0 ${AUDIO_BITRATE}k -c:a:0 eac3 -f eac3 $id.$lang.eac3"
-        echo "$id.$lang.eac3|$id|eac3|$orig_codec|$delay|$lang|$title" >> audio.exports
-      fi
+      ffopts="-map 0:$id -b:a:0 ${AUDIO_BITRATE}k -c:a:0 eac3 -f eac3 $id.$lang.eac3"
+      echo "$id.$lang.eac3|$id|eac3|$orig_codec|$delay|$lang|$title" >> audio.exports
     fi
     if [ "$orig_codec" == "eac3" ]; then
       ffopts="-map 0:$id -c:a:0 copy $id.$lang.eac3"
       echo "$id.$lang.eac3|$id|eac3|$orig_codec|$delay|$lang|$title" >> audio.exports
     fi
     if [ "$orig_codec" == "dts" ]; then
-      if [ "$MOBILE" == "yes" ]; then
-        # AAC for mobile
-        ffopts="-map 0:$id -b:a:0 ${AUDIO_BITRATE}k -c:a:0 aac -f aac $id.$lang.aac"
-        echo "$id.$lang.aac|$id|aac|$orig_codec|$delay|$lang|$title" >> audio.exports
-      else
-        ffopts="-map 0:$id -b:a:0 ${AUDIO_BITRATE}k -c:a:0 eac3 -f eac3 $id.$lang.eac3"
-        echo "$id.$lang.eac3|$id|eac3|$orig_codec|$delay|$lang|$title" >> audio.exports
-      fi
+      ffopts="-map 0:$id -b:a:0 ${AUDIO_BITRATE}k -c:a:0 eac3 -f eac3 $id.$lang.eac3"
+      echo "$id.$lang.eac3|$id|eac3|$orig_codec|$delay|$lang|$title" >> audio.exports
     fi
     if [ "$orig_codec" == "ac3" ]; then
       ffopts="-map 0:$id -c:a:0 copy $id.$lang.ac3"
@@ -441,29 +434,23 @@ EOF
     fi
   fi
 
-
   ### GRAB CHAPTERS
   mkvextract chapters -s "${input}" > chapters.list
   
   ### MUX MP4 - UPDATED PARAMETER SYNTAX FOR NEWER MP4BOX VERSION
   # Use the correct compatibility mode for each Dolby Vision profile
-  if [ "$MOBILE" == "yes" ]; then
-    # For mobile optimization, use Profile 5 with dvh1 codec ID
-    mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=5.hdr10 -brand mp42isom -ab dvh1")
-  else
-    if [ "$dv_target" -eq 4 ]; then
-      mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=4.bt709")
-    elif [ "$dv_target" -eq 5 ]; then
-      mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=5.hdr10")
-    elif [ "$dv_target" -eq 7 ]; then
-      if [ "$vscount" -eq 1 ]; then
-        mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=7.bt709")
-      else
-        mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=7.none")
-      fi
-    else # Profile 8
-      mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=8.hdr10")
+  if [ "$dv_target" -eq 4 ]; then
+    mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=4.bt709")
+  elif [ "$dv_target" -eq 5 ]; then
+    mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=5.hdr10")
+  elif [ "$dv_target" -eq 7 ]; then
+    if [ "$vscount" -eq 1 ]; then
+      mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=7.bt709")
+    else
+      mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=7.none")
     fi
+  else # Profile 8
+    mp4string=("$ionc MP4Box -add BL_RPU.hevc:dvp=8.hdr10")
   fi
   
   tcount=2
@@ -515,6 +502,7 @@ EOF
   else
     rm -f "${input}.dvconverting"
   fi
+}
 
 # Clean up leftover files from previous runs
 clean_directory
