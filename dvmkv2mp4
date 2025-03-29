@@ -506,12 +506,15 @@ EOF
   echo ${mp4string[*]}
   eval ${mp4string[*]}
   
+  if [ -f "$output.mp4" ]; then
+    echo "FILEFLOWS_OUTPUT:$output.mp4"
+  fi
+  
   if [ $DEBUG != "yes" ]; then
     cleanup "$input"
   else
     rm -f "${input}.dvconverting"
-  fi 
-}
+  fi
 
 # Clean up leftover files from previous runs
 clean_directory
