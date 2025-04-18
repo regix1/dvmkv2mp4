@@ -1,34 +1,28 @@
 #!/usr/bin/env bash
-
-# Dolby Vision / HDR10+ MKV to MP4 Conversion Script (Updated for 2025)
-# Converts MKV with Dolby Vision (Prof. 4,5,7,8) or HDR10+ to MP4 (DV Prof. 4,5,8.1) with HDR10 fallback.
-# Requires: ffmpeg 6.x+, MP4Box (GPAC) 1.1.0+, dovi_tool 2.x, hdr10plus_tool 1.6+, mediainfo 22+, jq, bc, mkvtoolnix, PgsToSrt.
-# Author: (Original by gacopl; updated by you)
+#
+# DV/HDR10+ MKV → MP4 Converter 1.0.3
+# Converts Dolby Vision Profile 7 MKVs to single‑layer Dolby Vision MP4 (Profile 8.1)
+# Usage: dvmkv2mp4 [OPTIONS]
+#   -f, --file FILE    Process only this MKV file (path relative to /convert)
+#   -s, --add-subs     Include subtitles in output
+#   -h, --help         Show this help
+#   -v, --version      Show version
 
 set -euo pipefail
 
-VERSION="1.0.2"
-ADDSUBS="no"       # “yes” to include converted subtitles
-SINGLEFILE=""      # specify a single MKV to process
+VERSION="1.0.3"
+ADDSUBS="no"
+SINGLEFILE=""
 
-log()   { echo -e "[INFO]  $*"; }
-warn()  { echo -e "[WARN]  $*"; }
-error() { echo -e "[ERROR] $*" >&2; }
-
-# Detect platform for IO niceness and sed
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  ionc="ionice --low"
-  sedcmd="gsed"
-else
-  ionc="ionice -c3"
-  sedcmd="sed"
-fi
+log()   { echo "[INFO]  $*"; }
+warn()  { echo "[WARN]  $*"; }
+error() { echo "[ERROR] $*" >&2; exit 1; }
 
 print_help() {
   cat <<EOF
 DV/HDR10+ MKV → MP4 Converter $VERSION
 Usage: $(basename "$0") [OPTIONS]
-  -f, --file FILE    Process only this file
+  -f, --file FILE    Process only this MKV file
   -s, --add-subs     Include subtitles in output
   -h, --help         Show this help
   -v, --version      Show version
@@ -38,185 +32,118 @@ EOF
 
 # Parse flags
 TEMP=$(getopt -o hsf:v --long help,add-subs,file:,version -n "$(basename "$0")" -- "$@")
-if [[ $? -ne 0 ]]; then error "Invalid args"; exit 1; fi
+if [[ $? -ne 0 ]]; then error "Invalid arguments"; fi
 eval set -- "$TEMP"
 while true; do
   case "$1" in
-    -h|--help)     print_help ;;
-    -v|--version)  echo "$(basename "$0") v$VERSION"; exit 0 ;;
-    -s|--add-subs) ADDSUBS="yes"; shift ;;
-    -f|--file)     SINGLEFILE="$2"; shift 2 ;;
-    --)            shift; break ;;
-    *)             break ;;
+    -h|--help)     print_help ;; 
+    -v|--version)  echo "$(basename "$0") v$VERSION"; exit 0 ;; 
+    -s|--add-subs) ADDSUBS="yes"; shift ;; 
+    -f|--file)     SINGLEFILE="$2"; shift 2 ;; 
+    --)            shift; break ;; 
+    *)             break ;; 
   esac
 done
 
-process_file() {
+# Detect platform
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  ionc="ionice --low"
+  sedcmd="gsed"
+else
+  ionc="ionice -c3"
+  sedcmd="sed"
+fi
+
+# Dependencies
+for cmd in mediainfo jq ffmpeg ffprobe mkvmerge mkvextract PgsToSrt dovi_tool MP4Box; do
+  command -v "$cmd" >/dev/null 2>&1 || error "Required tool '$cmd' not found"
+done
+
+# Process one file
+def process_file() {
   local input="$1"
-  log "Processing \"$input\""
-  [[ -f "${input}.dvconverting" ]] && { warn "Skipping, in progress"; return; }
-  touch "${input}.dvconverting"
+  log "Processing '$input'"
+  [[ -f "/convert/$input.doconverting" ]] && { warn "Skipping in-progress"; return; }
+  touch "/convert/$input.doconverting"
 
-  # Gather metadata
-  mi_full=$(mediainfo "$input" --Output=JSON)
-  dv_info=$(echo "$mi_full" | jq -r '.media.track[] | select(.["@type"]=="Video") | .HDR_Format // empty')
-  dv_profile_str=$(echo "$mi_full" | jq -r '.media.track[] | select(.["@type"]=="Video") | .HDR_Format_Profile // empty')
-  hdr10plus_info=$(echo "$mi_full" | jq -r '.media.track[] | select(.["@type"]=="Video") | .HDR_Format_Compatibility // empty')
-
-  dv_source=""; hdr10plus_source=""
-  dv_profile=""
-
-  if [[ "$dv_info" == *"Dolby Vision"* ]]; then
-    dv_source="yes"
-    if [[ "$dv_profile_str" =~ dvhe\.0*([0-9]+) ]]; then
-      dv_profile="${BASH_REMATCH[1]}"
-    fi
-    log "Detected Dolby Vision (profile $dv_profile)"
+  # Collect metadata
+  local mi dv_info dv_profile_str dv_profile
+  mi=$(mediainfo "/convert/$input" --Output=JSON)
+  dv_info=$(jq -r '.media.track[] | select(."@type"=="Video") | .HDR_Format // ""' <<<"$mi")
+  dv_profile_str=$(jq -r '.media.track[] | select(."@type"=="Video") | .HDR_Format_Profile // ""' <<<"$mi")
+  if [[ "$dv_info" != *"Dolby Vision"* ]]; then
+    warn "No Dolby Vision, skipping"; rm -f "/convert/$input.doconverting"; return
   fi
-  if [[ "$hdr10plus_info" == *"HDR10+"* || "$dv_info" == *"HDR10+"* ]]; then
-    hdr10plus_source="yes"
-    log "Detected HDR10+"
-  fi
-  if [[ -z "$dv_source" && -z "$hdr10plus_source" ]]; then
-    warn "No DV/HDR10+ found, skipping"
-    rm -f "${input}.dvconverting"
-    return
+  if [[ "$dv_profile_str" =~ dvhe\.[0]*([4578]) ]]; then
+    dv_profile=${BASH_REMATCH[1]}
+    log "Detected DV profile $dv_profile"
+  else
+    error "Unsupported DV profile string '$dv_profile_str'"
   fi
 
-  # Prepare names
-  base=$(echo "$input" | $sedcmd -E 's/\.mkv$//')
-  output_mp4="${base}-MP4.mp4"
-  dv_target_profile=""
-  ffmpeg_cmd=""; need_el="no"; need_rpu_gen="no"
+  cd /convert
+  mkdir -p tmp
+  local bl=BL.hevc rpu=RPU.bin blr=BL_RPU.hevc output
+  output="${input%.*}-MP4.mp4"
 
-  # Build ffmpeg extraction
-  if [[ -n "$dv_source" ]]; then
-    case "$dv_profile" in
-      4|5|8)
-        dv_target_profile="$dv_profile"
-        ffmpeg_cmd="$ionc ffmpeg -i \"$input\" -y -loglevel error -stats \
-          -map 0:v:0 -c:v copy -bsf:v hevc_mp4toannexb -f hevc BL_RPU.hevc"
-        ;;
-      7)
-        dv_target_profile="8"
-        vscount=$(ffprobe -v error -select_streams v -show_entries stream=index -of csv=p=0 "$input" | wc -l)
-        if (( vscount > 1 )); then
-          need_el="yes"
-          ffmpeg_cmd="$ionc ffmpeg -i \"$input\" -y -loglevel error -stats \
-            -map 0:v:0 -c:v copy -bsf:v hevc_mp4toannexb -f hevc BL.hevc \
-            -map 0:v:1 -c:v copy -bsf:v hevc_mp4toannexb -f hevc - | \
-            $ionc dovi_tool -m 2 extract-rpu - -o RPU.bin"
-        else
-          ffmpeg_cmd="$ionc ffmpeg -i \"$input\" -y -loglevel error -stats \
-            -map 0:v:0 -c:v copy -bsf:v hevc_mp4toannexb -f hevc - | \
-            $ionc dovi_tool -m 2 convert --discard -o BL_RPU.hevc -"
-        fi
-        ;;
-      *)
-        error "Unsupported DV profile $dv_profile"; rm -f "${input}.dvconverting"; return
-        ;;
-    esac
-  elif [[ -n "$hdr10plus_source" ]]; then
-    dv_target_profile="8"
-    need_rpu_gen="yes"
-    ffmpeg_cmd="$ionc ffmpeg -i \"$input\" -y -loglevel error -stats \
-      -map 0:v:0 -c:v copy -bsf:v hevc_mp4toannexb -f hevc BL.hevc \
-      -map 0:v:0 -c:v copy -bsf:v hevc_mp4toannexb -f hevc - | \
-      $ionc hdr10plus_tool extract -o hdr10plus_metadata.json -"
-  fi
-
-  log "Running video extraction..."
-  eval $ffmpeg_cmd
-
-  # Inject or generate RPU
-  if [[ "$need_el" == "yes" ]]; then
-    log "Injecting extracted RPU → BL_RPU.hevc"
-    $ionc dovi_tool inject-rpu --drop-hdr10plus -i BL.hevc --rpu-in RPU.bin -o BL_RPU.hevc
-    rm -f BL.hevc RPU.bin
-  fi
-
-  if [[ "$need_rpu_gen" == "yes" ]]; then
-    # parse display luminance
-    raw_dml=$(echo "$mi_full" | jq -r '.media.track[] | select(.["@type"]=="Video") | .MasteringDisplayLuminance // empty')
-    min_dml=$(echo "$raw_dml" | grep -oP '(?<=min: )[0-9\.]+' || echo 0.001)
-    max_dml=$(echo "$raw_dml" | grep -oP '(?<=max: )[0-9\.]+' || echo 1000)
-    max_cll=$(echo "$mi_full" | jq -r '.media.track[] | select(.["@type"]=="Video") | .MaximumContentLightLevel // 1000')
-    max_fall=$(echo "$mi_full" | jq -r '.media.track[] | select(.["@type"]=="Video") | .MaximumFrameAverageLightLevel // 400')
-    frame_count=$(echo "$mi_full" | jq -r '.media.track[] | select(.["@type"]=="Video") | .FrameCount // empty')
-    [[ -z "$frame_count" || "$frame_count" == "null" ]] && \
-      frame_count=$(ffprobe -v error -count_packets -select_streams v:0 -show_entries stream=nb_read_packets -of csv=p=0 "$input")
-    cat > extra.json <<EOF
-{"cm_version":"v2.9","length":$frame_count,"level6":{
-  "max_display_mastering_luminance":$max_dml,
-  "min_display_mastering_luminance":$min_dml,
-  "max_content_light_level":$max_cll,
-  "max_frame_average_light_level":$max_fall}}
-EOF
-    log "Generating RPU from HDR10+"
-    $ionc dovi_tool generate -j extra.json --hdr10plus-json hdr10plus_metadata.json -o RPU.bin
-    log "Injecting generated RPU → BL_RPU.hevc"
-    $ionc dovi_tool inject-rpu --drop-hdr10plus -i BL.hevc --rpu-in RPU.bin -o BL_RPU.hevc
-    rm -f BL.hevc RPU.bin extra.json hdr10plus_metadata.json
+  if [[ "$dv_profile" == "7" ]]; then
+    log "Converting Profile 7 → 8.1"
+    eval $ionc ffmpeg -i "$input" -y -loglevel error -stats \
+      -map 0:v:0 -c:v copy -bsf:v hevc_mp4toannexb -f hevc $bl \
+      -map 0:v:1 -c:v copy -bsf:v hevc_mp4toannexb -f hevc - \|
+      $ionc dovi_tool -m 2 extract-rpu - -o $rpu
+    $ionc dovi_tool inject-rpu --input $bl --rpu-in $rpu -o $blr
+  else
+    log "Profile $dv_profile: remuxing"
+    $ionc ffmpeg -i "$input" -y -loglevel error -stats \
+      -map 0:v:0 -c:v copy -bsf:v hevc_mp4toannexb -f hevc $blr
   fi
 
   # Subtitles
-  log "Extracting/Converting PGS subtitles"
-  sub_tracks=$(mkvinfo "$input" | grep -P 'Track.*subtitles' | awk -F ':' '{print $2}' | awk '{print $1}')
-  for tid in $sub_tracks; do
-    mkvextract tracks "$input" ${tid}:"track${tid}.sup" || continue
-    PgsToSrt "track${tid}.sup" "track${tid}.srt" || continue
-    rm -f "track${tid}.sup"
-  done
-
-  # Audio export list
-  ffprobe -v error -select_streams a -show_entries stream=index,codec_name,language -of csv=p=0 "$input" \
-    | awk -F',' '{print $1 "|" $2 "|" ($3==""?"und":$3)}' > audio.list
-
-  > audio.exports
-  while IFS="|" read idx codec lang; do
-    in="0:a:$idx"
-    if [[ "$codec" =~ ^(truehd|dts|dtsma)$ ]]; then
-      out="audio_${idx}.eac3"
-      ffmpeg -i "$input" -map "$in" -c:a eac3 -b:a 1536k "$out" -y -loglevel error
-    else
-      out="audio_${idx}.${codec}"
-      ffmpeg -i "$input" -map "$in" -c:a copy "$out" -y -loglevel error
-    fi
-    echo "$out|$lang" >> audio.exports
-  done < audio.list
-
-  # Build MP4Box command
-  mp4_cmd="$ionc MP4Box -add BL_RPU.hevc:dv-profile=$dv_target_profile:fps=auto"
-  while IFS="|" read stream lang; do
-    mp4_cmd+=" -add \"$stream\":lang=$lang"
-  done < audio.exports
-
   if [[ "$ADDSUBS" == "yes" ]]; then
-    for srt in *.srt; do
-      [[ -e "$srt" ]] && mp4_cmd+=" -add \"$srt\":lang=${srt%%.*}"
+    mapfile -t subs < <(mkvmerge -J "$input" | jq -r '.tracks[] | select(.type=="subtitles") | .id')
+    for id in "${subs[@]}"; do
+      mkvextract tracks "$input" ${id}:sub${id}.sup || continue
+      PgsToSrt sub${id}.sup sub${id}.srt || continue
+      rm -f sub${id}.sup
     done
   fi
 
-  mkvextract chapters "$input" -s chapters.xml 2>/dev/null || true
-  [[ -s chapters.xml ]] && mp4_cmd+=" -chap chapters.xml"
+  # Audio
+  ffprobe -v error -select_streams a -show_entries stream=index,codec_name -of csv=p=0 "$input" > audio.list
+  > audio.exports
+  while IFS=',' read -r i c; do
+    if [[ "$c" =~ ^(truehd|dts|dts_ma)$ ]]; then
+      ffmpeg -i "$input" -map 0:a:$i -c:a eac3 -b:a 1536k audio_${i}.eac3 -y -loglevel error
+      echo "audio_${i}.eac3|und" >> audio.exports
+    else
+      ffmpeg -i "$input" -map 0:a:$i -c:a copy audio_${i}.${c} -y -loglevel error
+      echo "audio_${i}.${c}|und" >> audio.exports
+    fi
+done < audio.list
 
-  mp4_cmd+=" -tmp ./tmp -brand mp42isom -ab dby1 \"$output_mp4\""
-  log "Muxing streams into $output_mp4"
-  eval $mp4_cmd
+  # Chapters
+  mkvextract chapters "$input" --simple chapters.txt 2>/dev/null || true
+
+  # Mux
+  log "Muxing to MP4"
+  cmd=( MP4Box -add $blr:dv-profile=8.1:fps=auto )
+  while IFS='|' read -r st lg; do cmd+=( -add "$st":lang=$lg ); done < audio.exports
+  if [[ "$ADDSUBS" == "yes" ]]; then for s in *.srt; do cmd+=( -add "$s":lang=und ); done; fi
+  [[ -s chapters.txt ]] && cmd+=( -chap chapters.txt )
+  cmd+=( -tmp tmp -brand mp42isom -ab dby1 "$output" )
+  "${cmd[@]}"
 
   # Cleanup
-  rm -f BL_RPU.hevc chapters.xml audio_*.eac3 audio_*.dts audio*.truehd audio*.ac3 *.srt audio.list audio.exports "${input}.dvconverting"
-  log "Done: $output_mp4"
+  rm -f "$input.doconverting" BL*.hevc $rpu audio.* .* exports chapters.txt tmp *.srt
+  log "Created $output"
 }
 
-# Main
-start=$(date +%s)
-log "Started at $(date)"
+cd /convert
 if [[ -n "$SINGLEFILE" ]]; then
-  [[ -f "$SINGLEFILE" ]] && process_file "$SINGLEFILE" || error "File not found"
+  process_file "$SINGLEFILE"
 else
-  for mkv in *.mkv; do [[ -e "$mkv" ]] || break; process_file "$mkv"; done
+  shopt -s nullglob
+  for f in *.mkv; do process_file "$f"; done
+  shopt -u nullglob
 fi
-end=$(date +%s)
-dur=$(( end - start ))
-printf "[INFO] Completed in %02d:%02d:%02d\n" $((dur/3600)) $(((dur%3600)/60)) $((dur%60))
