@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # DV/HDR10+ MKV → MP4 Converter 1.0.3
-# Converts Dolby Vision Profile 7 MKVs to single‑layer Dolby Vision MP4 (Profile 8.1)
+# Converts Dolby Vision Profile 7 MKVs to single‑layer Dolby Vision MP4 (Profile 8.1)
 # Usage: dvmkv2mp4 [OPTIONS]
 #   -f, --file FILE    Process only this MKV file (path relative to /convert)
 #   -s, --add-subs     Include subtitles in output (requires dotnet runtime and PgsToSrt.dll)
@@ -62,96 +62,96 @@ done
 
 #––– Processing function –––––––––––––––––––––––––––––––––––––––––––––––––––
 process_file() {
-  local input="\$1"
-  log "Processing '\$input'"
+  local input="$1"
+  log "Processing '$input'"
 
-  [[ -f "/convert/\$input.doconverting" ]] && { warn "Skipping in-progress"; return; }
-  touch "/convert/\$input.doconverting"
+  [[ -f "/convert/$input.doconverting" ]] && { warn "Skipping in-progress"; return; }
+  touch "/convert/$input.doconverting"
   cd /convert
 
   # Gather metadata
   local mi dv_info dv_profile_str dv_profile
-  mi=\$(mediainfo "\$input" --Output=JSON)
-  dv_info=\$(jq -r '.media.track[] | select(."@type"=="Video") | .HDR_Format // ""' <<<"\$mi")
-  dv_profile_str=\$(jq -r '.media.track[] | select(."@type"=="Video") | .HDR_Format_Profile // ""' <<<"\$mi")
-  [[ "\$dv_info" != *"Dolby Vision"* ]] && { warn "No Dolby Vision, skipping"; rm -f "\$input.doconverting"; return; }
-  if [[ "\$dv_profile_str" =~ dvhe\.[0]*([4578]) ]]; then
-    dv_profile=\${BASH_REMATCH[1]}
-    log "Detected DV profile \$dv_profile"
+  mi=$(mediainfo "$input" --Output=JSON)
+  dv_info=$(jq -r '.media.track[] | select(."@type"=="Video") | .HDR_Format // ""' <<<"$mi")
+  dv_profile_str=$(jq -r '.media.track[] | select(."@type"=="Video") | .HDR_Format_Profile // ""' <<<"$mi")
+  [[ "$dv_info" != *"Dolby Vision"* ]] && { warn "No Dolby Vision, skipping"; rm -f "$input.doconverting"; return; }
+  if [[ "$dv_profile_str" =~ dvhe\.[0]*([4578]) ]]; then
+    dv_profile=${BASH_REMATCH[1]}
+    log "Detected DV profile $dv_profile"
   else
-    error "Unsupported DV profile string '\$dv_profile_str'"
+    error "Unsupported DV profile string '$dv_profile_str'"
   fi
 
   mkdir -p tmp
   local bl=BL.hevc rpu=RPU.bin blr=BL_RPU.hevc output
-  output="\${input%.*}-MP4.mp4"
+  output="${input%.*}-MP4.mp4"
 
-  if [[ "\$dv_profile" == "7" ]]; then
+  if [[ "$dv_profile" == "7" ]]; then
     log "Converting Profile 7 → 8.1"
-    eval \$ionc ffmpeg -i "\$input" -y -loglevel error -stats \
-      -map 0:v:0 -c:v copy -bsf:v hevc_mp4toannexb -f hevc \$bl \
+    eval $ionc ffmpeg -i "$input" -y -loglevel error -stats \
+      -map 0:v:0 -c:v copy -bsf:v hevc_mp4toannexb -f hevc $bl \
       -map 0:v:1 -c:v copy -bsf:v hevc_mp4toannexb -f hevc - | \
-      \$ionc dovi_tool -m 2 extract-rpu - -o \$rpu
-    \$ionc dovi_tool inject-rpu --input \$bl --rpu-in \$rpu -o \$blr
+      $ionc dovi_tool -m 2 extract-rpu - -o $rpu
+    $ionc dovi_tool inject-rpu --input $bl --rpu-in $rpu -o $blr
   else
-    log "Profile \$dv_profile: remuxing"
-    \$ionc ffmpeg -i "\$input" -y -loglevel error -stats \
-      -map 0:v:0 -c:v copy -bsf:v hevc_mp4toannexb -f hevc \$blr
+    log "Profile $dv_profile: remuxing"
+    $ionc ffmpeg -i "$input" -y -loglevel error -stats \
+      -map 0:v:0 -c:v copy -bsf:v hevc_mp4toannexb -f hevc $blr
   fi
 
   # Subtitles
-  if [[ "\$ADDSUBS" == "yes" ]]; then
+  if [[ "$ADDSUBS" == "yes" ]]; then
     log "Extracting PGS→SRT subtitles"
-    mapfile -t subs < <(mkvmerge -J "\$input" | jq -r '.tracks[] | select(.type=="subtitles") | .id')
-    for id in "\${subs[@]}"; do
-      mkvextract tracks "\$input" "\$id:sub\$id.sup" || continue
-      /opt/dotnet/dotnet /opt/PgsToSrt/net6/PgsToSrt.dll --input sub\$id.sup --output sub\$id.srt --tesseractlanguage eng || continue
-      rm -f sub\$id.sup
+    mapfile -t subs < <(mkvmerge -J "$input" | jq -r '.tracks[] | select(.type=="subtitles") | .id')
+    for id in "${subs[@]}"; do
+      mkvextract tracks "$input" "$id:sub$id.sup" || continue
+      /opt/dotnet/dotnet /opt/PgsToSrt/net6/PgsToSrt.dll --input sub$id.sup --output sub$id.srt --tesseractlanguage eng || continue
+      rm -f sub$id.sup
     done
   fi
 
   # Audio
   log "Processing audio"
-  ffprobe -v error -select_streams a -show_entries stream=index,codec_name -of csv=p=0 "\$input" > audio.list
+  ffprobe -v error -select_streams a -show_entries stream=index,codec_name -of csv=p=0 "$input" > audio.list
   > audio.exports
   while IFS=',' read -r idx codec; do
     local out=""
-    if [[ "\$codec" =~ ^(truehd|dts|dts_ma)\$ ]]; then
-      out="audio_\${idx}.eac3"
-      ffmpeg -i "\$input" -map 0:a:\$idx -c:a eac3 -b:a 1536k "\$out" -y -loglevel error
+    if [[ "$codec" =~ ^(truehd|dts|dts_ma)$ ]]; then
+      out="audio_${idx}.eac3"
+      ffmpeg -i "$input" -map 0:a:$idx -c:a eac3 -b:a 1536k "$out" -y -loglevel error
     else
-      out="audio_\${idx}.\$codec"
-      ffmpeg -i "\$input" -map 0:a:\$idx -c:a copy "\$out" -y -loglevel error
+      out="audio_${idx}.$codec"
+      ffmpeg -i "$input" -map 0:a:$idx -c:a copy "$out" -y -loglevel error
     fi
-    echo "\$out|und" >> audio.exports
+    echo "$out|und" >> audio.exports
   done < audio.list
 
   # Chapters
-  mkvextract chapters "\$input" --simple chapters.txt 2>/dev/null || true
+  mkvextract chapters "$input" --simple chapters.txt 2>/dev/null || true
 
   # Mux
   log "Muxing into MP4"
-  mp4cmd=( MP4Box -add \$blr:dv-profile=8.1:fps=auto )
+  mp4cmd=( MP4Box -add $blr:dv-profile=8.1:fps=auto )
   while IFS='|' read -r st lg; do
-    mp4cmd+=( -add "\$st":lang=\$lg )
+    mp4cmd+=( -add "$st":lang=$lg )
   done < audio.exports
-  if [[ "\$ADDSUBS" == "yes" ]]; then
-    for srt in *.srt; do [[ -f "\$srt" ]] && mp4cmd+=( -add "\$srt":lang=und ); done
+  if [[ "$ADDSUBS" == "yes" ]]; then
+    for srt in *.srt; do [[ -f "$srt" ]] && mp4cmd+=( -add "$srt":lang=und ); done
   fi
   [[ -s chapters.txt ]] && mp4cmd+=( -chap chapters.txt )
-  mp4cmd+=( -tmp tmp -brand mp42isom -ab dby1 "\$output" )
-  "\${mp4cmd[@]}"
+  mp4cmd+=( -tmp tmp -brand mp42isom -ab dby1 "$output" )
+  "${mp4cmd[@]}"
 
   # Cleanup
-  rm -f "\$input.doconverting" BL*.hevc \$rpu audio.list audio.exports chapters.txt tmp *.srt
-  log "Created \$output"
+  rm -f "$input.doconverting" BL*.hevc $rpu audio.list audio.exports chapters.txt tmp *.srt
+  log "Created $output"
 }
 
 cd /convert
-if [[ -n "\$SINGLEFILE" ]]; then
-  process_file "\$SINGLEFILE"
+if [[ -n "$SINGLEFILE" ]]; then
+  process_file "$SINGLEFILE"
 else
   shopt -s nullglob
-  for f in *.mkv; do process_file "\$f"; done
+  for f in *.mkv; do process_file "$f"; done
   shopt -u nullglob
 fi
